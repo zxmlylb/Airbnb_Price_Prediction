@@ -1,0 +1,192 @@
+---
+title: "MATH218 HW1 -- Practicing KNN"
+author: "Yiran Shi (Steven) & Bo Liu"
+date: "9/22/2021"
+output: html_document
+---
+We are using the California Housing price dataset. The dataset is derived from the 1990 census and shows the median house price of California districts. Further information on the dataset can be find in this link:https://www.kaggle.com/camnugent/california-housing-prices.
+
+In using this dataset, we aim to predict the median price of a given house using its number of accommodates, bathrooms, bedrooms, and beds as the predictors.
+
+```{r setup, include=FALSE}
+library(readr)
+library(class)
+library(FNN)
+library(tidyverse)
+```
+
+```{r load file, include=FALSE}
+# preprocess the dataset
+data <- read_csv("data/listings.csv")
+select_column <- c("accommodates", "bathrooms", "bedrooms", "beds", "price")
+house_data <- data %>% 
+  select(select_column) %>%
+  na.omit()
+
+house_data <- house_data %>% 
+  mutate(price_parse = parse_number(price))
+
+house_price <- c(parse_number(house_data$price))
+```
+
+```{r normalize}
+# normalize the data in order for more accurate KNN fit
+scale.acc <- rnorm(house_data$accommodates, mean(house_data$accommodates), sd(house_data$accommodates))
+scale.bath <- (house_data$bathrooms - mean(house_data$bathrooms))/sd(house_data$bathrooms)
+scale.bedroom <- (house_data$bedrooms - mean(house_data$bedrooms))/sd(house_data$bedrooms)
+scale.bed <- (house_data$beds - mean(house_data$beds))/sd(house_data$beds)
+
+norm_data <- data.frame(scale.acc, scale.bath, scale.bedroom, scale.bed)
+```
+
+
+```{r apply knn}
+# fit KNN model with different k values on the dataset
+# LOO cross-validation method is applied
+pred.vector <- NULL
+error.vector <- NULL
+
+max.k <- 150
+for (k in 1:max.k) {
+
+  
+  for(row in 1:nrow(norm_data)){
+    train.data <- norm_data[-row,]
+    test.data <- norm_data[row,]
+    train.labels <- house_price[-row]
+    test.labels <- house_price[row]
+    
+    model.reg <- knn.reg(train = train.data, 
+                         test = test.data,
+                         y=train.labels,
+                         k=k)
+
+    pred.vector[row] <- model.reg$pred - test.labels
+  }
+  error.vector[k] <- mean(pred.vector^2)
+
+}
+```
+
+```{r find optimal k}
+# Determine the optimal value of K
+
+pred.data <- data.frame(error.vector,
+                        k = 1:max.k)
+pred.data %>% 
+  ggplot(aes(x = k,
+             y = error.vector)) + 
+  geom_point(colour = "red") +
+  ggtitle("Mean Squared Error vs. k values") +
+  ylab("Mean Squared Error") +
+  xlab("k (nearest neighbor parameter)")
+
+# find best k 
+best.k <- pred.data %>% 
+      filter(error.vector == min(error.vector))
+best.k <- best.k$k
+```
+
+To determine the most optimal k value for our model, we used leave-one-out cross-validation to determine the optimal k value with the least error. We first calculated the difference between our predicted house price and its actual value for each row. We then calculated the average of its squared error for a given k value. We repeated this process k value between 1 and 50. Then by plotting the average error against each K value, we can visualize the change of our model's accuracy as we increase the k value. Specifically, we find that the mean squared error decreases rapidly after the first few k values. This is  because the average of 3 or more values will be a more accurate prediction than just finding the single nearest neighbor. However, as the number of k nearest neighbor further increases, we find that its effect of improving the model's accuracy diminishes and eventually mean squared error increases. In the end, for the 150 total k values investigated, we spotted the k value that gives us the minimal mean squared error is 43. 
+
+```{r plot visualization}
+# 1. Plot Accomdates and Bedrooms
+acc_bedroom_grid <- expand.grid(acc = seq(from = min(house_data$accommodates), to= max(house_data$accommodates),by =1),
+                    bedroom = seq(from = min(house_data$bedrooms), to= max(house_data$bedrooms),by =1))
+
+knn_acc_bedroom <- function(acc, bedroom, k){
+  
+  #normalize (scale) our values in data
+  scaled.accommodates <- (house_data$accommodates - mean(house_data$accommodates))/sd(house_data$accommodates)
+  scaled.bedrooms <-(house_data$bedrooms - mean(house_data$bedrooms))/sd(house_data$bedrooms)
+  
+  #normalize (scale) user inputs
+  scaled.accommodates.input <- (acc - mean(house_data$accommodates))/sd(house_data$accommodates)
+  scaled.bedrooms.input <-(bedroom - mean(house_data$bedrooms))/sd(house_data$bedrooms)
+  
+  house_data %>%
+    mutate(scaled.accommodates, scaled.bedrooms) %>%
+    mutate(distance = sqrt((scaled.accommodates.input - scaled.accommodates)^2 + (scaled.bedrooms.input - scaled.bedrooms)^2)) %>%
+    arrange(distance) %>%
+    head(k) %>%
+    summarize(prediction = round(mean(price_parse))) %>%
+    pull(prediction) %>%
+    return()
+}
+
+acc_bedroom_grid <- acc_bedroom_grid %>% 
+  group_by(acc,bedroom) %>% 
+  mutate(prediction = knn_acc_bedroom(acc,bedroom,best.k))
+```
+
+
+```{r plot visualization grid}
+# 2. Plot Beds and Bathrooms
+bed_bathroom_grid <- expand.grid(beds = seq(from = min(house_data$beds), to= max(house_data$beds),by =1),
+                    bathrooms = seq(from = min(house_data$bathrooms), to= max(house_data$bathrooms),by =1))
+
+knn_bed_bathroom <- function(bed, bathroom, k){
+  
+  #normalize (scale) our values in data
+  scaled.bed <- (house_data$beds - mean(house_data$beds))/sd(house_data$beds)
+  scaled.bathroom <-(house_data$bathrooms - mean(house_data$bathrooms))/sd(house_data$bathrooms)
+  
+  #normalize (scale) user inputs
+  scaled.bed.input <- (bed - mean(house_data$beds))/sd(house_data$beds)
+  scaled.bathroom.input <-(bathroom - mean(house_data$bathrooms))/sd(house_data$bathrooms)
+  
+  # pull prediction for each grid point
+  house_data %>%
+    mutate(scaled.bed, scaled.bathroom) %>%
+    mutate(distance = sqrt((scaled.bed.input - scaled.bed)^2 + (scaled.bathroom.input - scaled.bathroom)^2)) %>%
+    arrange(distance) %>%
+    head(k) %>%
+    summarize(prediction = round(mean(price_parse))) %>%
+    pull(prediction) %>%
+    return()
+}
+
+
+bed_bathroom_grid <- bed_bathroom_grid %>% 
+  group_by(beds,bathrooms) %>% 
+  mutate(prediction = knn_bed_bathroom(beds,bathrooms,best.k))
+```
+
+```{r generate prediction plot}
+p1 <- house_data %>% 
+  ggplot()+
+  geom_point(size=10, alpha =0.7, shape = "square",data=acc_bedroom_grid, mapping = aes(x=acc, y=bedroom, color = prediction)) +
+  geom_point(size=5, fill= "white", mapping = aes(x=accommodates, y=bedrooms, color = price_parse)) +
+  scale_color_gradientn(colours = rainbow(3)) + 
+  theme_bw() +
+  ggtitle("Result of Price Prediction Based on Number of Bedroom and Accomdates") +
+  xlab("Number of Accomdates") +
+  ylab("Number of Bedroom")
+
+p2 <- house_data %>% 
+  ggplot()+
+  geom_point(size=10, alpha =0.7, shape = "square",data=bed_bathroom_grid, mapping = aes(x=beds, y=bathrooms, color = prediction)) +
+  geom_point(size=5, fill= "white", mapping = aes(x=beds, y=bathrooms, color = price_parse)) +
+  scale_color_gradientn(colours = rainbow(3)) + 
+  theme_bw() +
+  ggtitle("Result of Price Prediction Based on Number of Beds and Bathrooms") +
+  xlab("Number of Beds") +
+  ylab("Number of Bathrooms")
+
+p1
+p2
+```
+
+
+Looking at the two shaded graph, we could observe that the region at the left bottom corner is shaded in red and the corner in the top right is shaded in bright green. We believe this correspond to our intuition about housing price, as small number of beds and accommodates often suggest the purpose of the house is for individual person and family uses, while higher number of beds, bathrooms, accommodates and bedrooms often indicate that the space is more of a commercial nature. 
+
+Advantage and Disadvantage of kNN model
+We think the regression kNN model works well in the context of price prediction. As shown in the graph plotted, the different predictor variable values does correspond to different shades and therefore different median prices. 
+
+One advantage of applying kNN in predicting house price is that it holds the least assumption of the relationship our predictors and outcomes. It reaches its prediction by simply considering the distance among the training dataset and our test dataset. In contrast, if we instead use a linear regression model, the underlying assumption will be that the our predictors, ie the number of bedrooms and accommodates will be proportionally related to its house price, which is not true from our common sense. Using kNN eliminates such predisposed assumption that is put into our predictors.
+
+One disadvantage of applying kNN in our context is that the housing dataset contains lots of categorical data like zipcode and street name. While we could transform some categroical data into numerical values, some other binary columns like is_superhost is harder to interpret numerically. On the other hand, for such meaningful categorical data, it becomes even more difficult for us to choose an reasonable distance metrics when considering its nearest neighbors.The kNN model is quite limited when it comes to interpreting such categorical values. 
+
+Another disadvantage is related to the relationship between our predictor variables. As we can see, the plotted color graph could only display two variable on a two-dimensional axis. However,we know our actual kNN model is fitted by four variables. When plotting only the two of the variables on a graph, its effect of the other two variables is not visualized, nor can we distinguish their effect on the outcome. On the other hand, for example, if we use linear regression model, it will be easier for us to quantify the effect of different variables on house price. But it is hard to tell such magnitude of how our predictors is affecting our outcome in a kNN model.
+
+
